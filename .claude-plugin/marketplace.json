@@ -1,0 +1,6 @@
+{
+  "name": "yae-air-test",
+  "description": "ワードマスキング mod を組織の mod として読み込めるかを試すための、試験用のマーケットプレイス。",
+  "owner": { "name": "word-mask test" },
+  "plugins": [{ "name": "word-mask-org", "source": "./" }]
+}
