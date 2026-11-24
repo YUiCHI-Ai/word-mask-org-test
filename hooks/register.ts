@@ -11,6 +11,9 @@ import type { Register } from 'claude-code'
  *     拒否文に実名が載るため（設定のフックの書き換えは止められない。2026-11-20 実測）。
  *   - 失敗した結果（isError）・止められたときの知らせに実名があれば、仮名にした文を拒否として返す。
  *   - 別のチャットから届くメッセージ（session.receive）の本文を仮名にする。
+ * v0.7.1（2026-11-24）: 対応表（word-mask.config.json）が mod のフォルダーに無ければ、
+ *   各PCの決まった場所（~/.claude/mods/word-mask/word-mask.config.json）を読む。
+ *   組織の mod（appendPlugins）として配った写しでも、各PCの対応表を使えるようにするため。
  *
  * モデル（Anthropic サーバー）へ入る側はすべて 実名(from)→仮名(to) へ変換し、
  * モデルから出る側はすべて 仮名(to)→実名(from) へ復元する。
@@ -240,10 +243,31 @@ export function applyExternalText(text: string | null, projectRoot = ''): void {
   recomputePairs()
 }
 
+/** 各PCで対応表を置く決まった場所（ホームフォルダー基準）。組織の mod として配った写しから読むため（v0.7.1〜） */
+export function sharedConfigPath(home: string): string {
+  return `${home.replace(/[\\/]+$/, '')}/.claude/mods/word-mask/${EXTERNAL_CONFIG_BASENAME}`
+}
+
+/** 対応表のファイルの場所。mod のフォルダーにあればそれ、無ければ各PCの決まった場所。どちらも無ければ null。
+ *  組織の mod として入れた写しは、mod のフォルダーが配布物の写し（対応表を置かない）なので、決まった場所を読む */
+async function externalConfigPath($: {
+  fs: { exists: (path: string) => Promise<boolean> }
+  plugin: { root: string }
+  env: { get: (name: string) => Promise<string | undefined> }
+}): Promise<string | null> {
+  const own = `${$.plugin.root}/${EXTERNAL_CONFIG_BASENAME}`
+  if (await $.fs.exists(own)) return own
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  if (!home) return null
+  const shared = sharedConfigPath(home)
+  return (await $.fs.exists(shared)) ? shared : null
+}
+
 async function loadConfig($: {
   fs: { read: (path: string) => Promise<string>; exists: (path: string) => Promise<boolean> }
   plugin: { root: string }
   session: { cwd: () => Promise<string> }
+  env: { get: (name: string) => Promise<string | undefined> }
 }): Promise<void> {
   try {
     applyConfigText(await $.fs.read(CONFIG_RELPATH))
@@ -251,8 +275,8 @@ async function loadConfig($: {
     // 読めないときは直前の設定を維持（起動直後に読めなければ無効のまま）
   }
   try {
-    const externalPath = `${$.plugin.root}/${EXTERNAL_CONFIG_BASENAME}`
-    if (await $.fs.exists(externalPath)) {
+    const externalPath = await externalConfigPath($)
+    if (externalPath !== null) {
       const projectRoot = await $.session.cwd()
       // JSON が壊れていれば throw → 直前の対応表を維持（変換の突然停止を防ぐ）
       applyExternalText(await $.fs.read(externalPath), projectRoot)

@@ -1,5 +1,5 @@
 {
   "name": "word-mask-org",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "ワードマスキング（word-mask v0.7）を組織の mod として読み込む試験用の写し。対応表は含まない。ON/OFF は各案件の guard-config.json、対応表は各PCの word-mask.config.json または guard-config.json。"
 }
