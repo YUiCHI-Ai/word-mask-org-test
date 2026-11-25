@@ -14,6 +14,11 @@ import type { Register } from 'claude-code'
  * v0.7.1（2026-11-24）: 対応表（word-mask.config.json）が mod のフォルダーに無ければ、
  *   各PCの決まった場所（~/.claude/mods/word-mask/word-mask.config.json）を読む。
  *   組織の mod（appendPlugins）として配った写しでも、各PCの対応表を使えるようにするため。
+ * v0.7.2（2026-11-25）: 別の AI に宛てた文を実名に戻さない。
+ *   - サブエージェントの報告（SubagentHandback）・別のチャットへのメッセージ（SendMessage 等）の入力は
+ *     実名に戻さない（戻すと、親の会話・送り先の会話のモデルへ実名が届いていた。11/25 試験で確認）。
+ *   - サブエージェントの報告が親へ渡る直前（agent.report）にも、報告文を仮名にする（旧版の mod が
+ *     報告を実名に戻していても、親には仮名で届くように）。
  *
  * モデル（Anthropic サーバー）へ入る側はすべて 実名(from)→仮名(to) へ変換し、
  * モデルから出る側はすべて 仮名(to)→実名(from) へ復元する。
@@ -71,7 +76,14 @@ const CONFIG_RELPATH = '.claude/hooks/guard-config.json'
 const EXTERNAL_CONFIG_BASENAME = 'word-mask.config.json'
 
 // 入力側の逆変換をしないツール（指示文がモデル側＝仮名世界に留まるもの）
-const INPUT_UNMASK_EXCLUDED_TOOLS = new Set(['Agent', 'Task'])
+// v0.7.2: 別の AI に宛てた文（サブエージェントの報告・別のチャットへのメッセージ）も仮名のまま渡す
+const INPUT_UNMASK_EXCLUDED_TOOLS = new Set([
+  'Agent',
+  'Task',
+  'SubagentHandback',
+  'SendMessage',
+  'mcp__ccd_session_mgmt__send_message',
+])
 
 // tool.call 入力の予約キー（書き換えが拒否される／意味を持つため触らない）
 const RESERVED_INPUT_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'requestMeta', 'consent'])
@@ -484,6 +496,20 @@ export const register: Register = (on) => {
     if (!enabled || pairs.length === 0 || typeof e.text !== 'string') return next(e)
     const t = maskOut(e.text)
     return t === e.text ? next(e) : next({ ...e, text: t })
+  }).catch(($, e, next) => next(e))
+
+  // ── 入る側⑦: サブエージェントの報告（v0.7.2〜）
+  //    報告は SubagentHandback の入力や最後の文として親へ渡る。親の会話に入る直前にここで仮名にする。
+  //    next(e) は自動モードの審査を返すだけで、届くのは一番外側のフックが返す text
+  on('agent.report', async ($, e, next) => {
+    await loadConfig($)
+    if (!enabled || pairs.length === 0 || typeof e.text !== 'string') return next(e)
+    const masked = maskOut(e.text)
+    const r = await next(masked === e.text ? e : { ...e, text: masked })
+    if (!r || typeof (r as { text?: unknown }).text !== 'string') return r
+    const rt = (r as { text: string }).text
+    const out = maskOut(rt)
+    return out === rt ? r : ({ ...r, text: out } as typeof r)
   }).catch(($, e, next) => next(e))
 
   // ── 出る側: 画面表示のみ to → from に復元（保存内容・モデル側はそのまま）
